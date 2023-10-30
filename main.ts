@@ -1,4 +1,9 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import remarkRehype from 'remark-rehype'
+import rehypeStringify from 'rehype-stringify'
+import remarkGfm from 'remark-gfm'
+import remarkParse from 'remark-parse'
+import { unified } from 'unified';
 
 // Remember to rename these classes and interfaces!
 
@@ -76,10 +81,157 @@ export default class MyPlugin extends Plugin {
 
 		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
 		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+
+		this.addCommand({
+			id: "generate-anki-cards",
+			name: "Generate Anki Cards",
+			callback: async () => {
+				// get contents of a markdown file
+				const file = this.app.workspace.activeEditor?.file
+				if (!file) {
+					return
+				}
+
+				const contents = await this.app.vault.read(file)
+				const tags = []
+				let deck = "Default"
+
+				const processor = unified().use(remarkParse).parse(contents)
+
+				const cards: { [key: string]: any } = {}
+				let currentCard = null
+				for (let i = 0; i < processor.children.length; i++) {
+					const element = processor.children[i];
+					if (element.type === "heading") {
+						// file info
+						const key = (element.children[0] as any)?.value
+						if (i === 1) {
+							const [rawTags, rawDeck] = key.split("\n")
+							const _tags = rawTags.split(" ").slice(1)
+							const _deck = rawDeck.split("deck:")[1]
+
+							deck = _deck
+							tags.push(..._tags)
+						} else {
+							currentCard = element
+							const depth = element.depth
+							const position = element.position
+
+							if (key.includes("#card")) {
+								cards[key] = { front: element, back: [], depth, position, ankiId: null, hash: null }
+							} else {
+								currentCard = null
+							}
+						}
+					} else if (element.type === "html") {
+						if (element.value.startsWith("<!--") && element.value.endsWith("-->")) {
+							if (currentCard) {
+								const [_, ankiId, md5hash, __] = element.value.split(" ")
+								const key = (currentCard.children[0] as any)?.value
+								cards[key].ankiId = ankiId
+								cards[key].hash = md5hash
+							}
+						}
+					} else {
+						if (currentCard) {
+							cards[(currentCard.children[0] as any)?.value].back.push(element)
+						}
+					}
+				}
+
+				const crypto = require('crypto');
+
+				let pattern = /#card\s*(.*)/g
+				let count = 0 // how many anki ids we have inserted
+				for await (const [key, value] of Object.entries(cards)) {
+					const front = value.front
+					const back = value.back
+					const frontText = front.children[0].value.replace(pattern, "").trim()
+					const backTexts = []
+					for (const element of back) {
+						if (element.type === "paragraph") {
+							const child = element.children[0]
+							if (child.type === "text") {
+								backTexts.push(child.value + "\n")
+							} else if (child.type === "inlineCode") {
+								backTexts.push("`" + child.value + "`\n")
+							}
+						} else if (element.type === "code") {
+							backTexts.push("```" + element.lang + "\n" + element.value + "\n```")
+						}
+					}
+					const backText = backTexts.join("\n")
+					const joinedText = frontText + backText
+					const md5hash = crypto.createHash('md5').update(joinedText).digest("hex")
+
+					if (value.hash === md5hash) {
+						continue
+					}
+
+					cards[key].hash = md5hash
+
+					try {
+						let action = "addNote"
+
+						if (value.ankiId) {
+							action = "updateNote"
+						}
+
+						const html = await unified()
+							.use(remarkParse)
+							.use(remarkGfm)
+							.use(remarkRehype)
+							.use(rehypeStringify, { allowDangerousHtml: true })
+							.process(backText)
+
+						const response = await fetch("http://localhost:8765", {
+							method: "POST",
+							body: JSON.stringify({
+								"action": action,
+								"version": 6,
+								"params": {
+									"note": {
+										"id": Number(value.ankiId) ? Number(value.ankiId) : null,
+										"deckName": deck,
+										"modelName": "Basic-23794",
+										"fields": {
+											"Front": frontText,
+											"Back": String(html)
+										},
+										"tags": tags
+									}
+								}
+							})
+						})
+						const data = await response.json()
+						if (data.error) {
+							console.log(data.error)
+						} else {
+							if (action === "addNote") {
+								const ankiId = data.result
+								cards[key].ankiId = ankiId
+
+								const line = value.position.start.line - 1
+								const hashtag = "#".repeat(value.depth)
+								this.app.workspace.activeEditor?.editor?.setLine(line + count, `${hashtag} ${key}\n<!-- ${ankiId} ${md5hash} -->`)
+								count++
+							} else {
+								const ankiId = cards[key].ankiId
+								const line = value.position.start.line
+								this.app.workspace.activeEditor?.editor?.setLine(line + count, `<!-- ${ankiId} ${md5hash} -->`)
+							}
+						}
+					} catch (e) {
+						console.log(e)
+					}
+				}
+			}
+		})
 	}
 
 	onunload() {
 
+		console.log("UNLOADING PLUGIN")
 	}
 
 	async loadSettings() {
@@ -97,12 +249,12 @@ class SampleModal extends Modal {
 	}
 
 	onOpen() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.setText('Woah!');
 	}
 
 	onClose() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.empty();
 	}
 }
@@ -116,7 +268,7 @@ class SampleSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		const { containerEl } = this;
 
 		containerEl.empty();
 
