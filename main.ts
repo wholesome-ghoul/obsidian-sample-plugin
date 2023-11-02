@@ -150,15 +150,18 @@ export default class MyPlugin extends Plugin {
 					const backTexts = []
 					for (const element of back) {
 						if (element.type === "paragraph") {
-							const child = element.children[0]
-							if (child.type === "text") {
-								backTexts.push(child.value + "\n")
-							} else if (child.type === "inlineCode") {
-								backTexts.push("`" + child.value + "`\n")
+							for (const child of element.children) {
+								if (child.type === "text") {
+									backTexts.push(child.value)
+								} else if (child.type === "inlineCode") {
+									backTexts.push("`" + child.value + "`")
+								}
 							}
 						} else if (element.type === "code") {
 							backTexts.push("```" + element.lang + "\n" + element.value + "\n```")
 						}
+
+						backTexts.push("\n")
 					}
 					const backText = backTexts.join("\n")
 					const joinedText = frontText + backText
