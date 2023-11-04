@@ -4,6 +4,7 @@ import rehypeStringify from 'rehype-stringify'
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified';
+import { remark } from 'remark';
 
 // Remember to rename these classes and interfaces!
 
@@ -98,10 +99,63 @@ export default class MyPlugin extends Plugin {
 
 				const processor = unified().use(remarkParse).parse(contents)
 
+				const u = unified()
+					.use(remarkParse)
+					.use(remarkGfm)
+					.use(remarkRehype)
+					.use(rehypeStringify, { allowDangerousHtml: true })
+					.use({ settings: { bullet: "-" } })
+
+				function getChildren(node: any): any {
+					const children = []
+					for (const child of node.children) {
+						if (child.type === "text") {
+							children.push(child.value)
+						} else if (child.type === "inlineCode") {
+							children.push("`" + child.value + "`")
+						} else if (child.type === "paragraph") {
+							children.push(getChildren(child))
+						} else if (child.type === "list") {
+							for (const listItem of child.children) {
+								children.push(getChildren(listItem))
+							}
+						} else if (child.type === "code") {
+							children.push("```" + child.lang + "\n" + child.value + "\n```")
+						}
+					}
+
+					return children
+				}
+
 				const cards: { [key: string]: any } = {}
 				let currentCard = null
+				let additonalFront = false
+				// let additonalBack = false
 				for (let i = 0; i < processor.children.length; i++) {
 					const element = processor.children[i];
+					if (element.type === "html") {
+						if (element.value.startsWith("<!--") && element.value.endsWith("-->")) {
+							if (element.value.includes("AnkiFront:start")) {
+								additonalFront = true
+								continue
+							} else if (element.value.includes("AnkiFront:end")) {
+								additonalFront = false
+								continue
+							}
+
+
+							// anki id and hash are always after heading containing #card tag
+							if (currentCard && currentCard?.position?.start.line === element.position!.start.line - 1) {
+								const [_, ankiId, md5hash, __] = element.value.split(" ")
+								const key = (currentCard.children[0] as any)?.value
+								cards[key].ankiId = ankiId
+								cards[key].hash = md5hash
+							}
+						}
+
+						continue
+					}
+
 					if (element.type === "heading") {
 						// file info
 						const key = (element.children[0] as any)?.value
@@ -118,22 +172,15 @@ export default class MyPlugin extends Plugin {
 							const position = element.position
 
 							if (key.includes("#card")) {
-								cards[key] = { front: element, back: [], depth, position, ankiId: null, hash: null }
+								cards[key] = { front: [element], back: [], depth, position, ankiId: null, hash: null }
 							} else {
 								currentCard = null
 							}
 						}
-					} else if (element.type === "html") {
-						if (element.value.startsWith("<!--") && element.value.endsWith("-->")) {
-							if (currentCard) {
-								const [_, ankiId, md5hash, __] = element.value.split(" ")
-								const key = (currentCard.children[0] as any)?.value
-								cards[key].ankiId = ankiId
-								cards[key].hash = md5hash
-							}
-						}
-					} else {
-						if (currentCard) {
+					} else if (currentCard) {
+						if (additonalFront) {
+							cards[(currentCard.children[0] as any)?.value].front.push(element)
+						} else {
 							cards[(currentCard.children[0] as any)?.value].back.push(element)
 						}
 					}
@@ -146,8 +193,8 @@ export default class MyPlugin extends Plugin {
 				for await (const [key, value] of Object.entries(cards)) {
 					const front = value.front
 					const back = value.back
-					const frontText = front.children[0].value.replace(pattern, "").trim()
 					const backTexts = []
+					const frontTexts = []
 					for (const element of back) {
 						if (element.type === "paragraph") {
 							for (const child of element.children) {
@@ -163,7 +210,34 @@ export default class MyPlugin extends Plugin {
 
 						backTexts.push("\n")
 					}
+
+					const heading = front[0].children[0].value.replace(pattern, "").trim()
+					frontTexts.push(heading)
+					frontTexts.push("\n")
+
+					for (let i = 1; i < front.length; i++) {
+						let element = front[i]
+						if (element.type === "paragraph") {
+							for (const child of element.children) {
+								if (child.type === "text") {
+									frontTexts.push(child.value)
+								} else if (child.type === "inlineCode") {
+									frontTexts.push("`" + child.value + "`")
+								}
+							}
+						} else if (element.type === "list") {
+							for (const listItem of element.children) {
+								const children = getChildren(listItem)
+								frontTexts.push("- " + children.join(" "))
+							}
+						} else if (element.type === "code") {
+							frontTexts.push("```" + element.lang + "\n" + element.value + "\n```")
+						}
+
+						frontTexts.push("\n")
+					}
 					const backText = backTexts.join("\n")
+					const frontText = frontTexts.join("\n")
 					const joinedText = frontText + backText
 					const md5hash = crypto.createHash('md5').update(joinedText).digest("hex")
 
@@ -180,12 +254,11 @@ export default class MyPlugin extends Plugin {
 							action = "updateNote"
 						}
 
-						const html = await unified()
-							.use(remarkParse)
-							.use(remarkGfm)
-							.use(remarkRehype)
-							.use(rehypeStringify, { allowDangerousHtml: true })
+
+						const backHtml = await u()
 							.process(backText)
+						const frontHtml = await u()
+							.process(frontText)
 
 						const response = await fetch("http://localhost:8765", {
 							method: "POST",
@@ -198,8 +271,8 @@ export default class MyPlugin extends Plugin {
 										"deckName": deck,
 										"modelName": "Basic-23794",
 										"fields": {
-											"Front": frontText,
-											"Back": String(html)
+											"Front": String(frontHtml),
+											"Back": String(backHtml)
 										},
 										"tags": tags
 									}
