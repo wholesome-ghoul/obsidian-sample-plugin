@@ -143,7 +143,6 @@ export default class MyPlugin extends Plugin {
 								continue
 							}
 
-
 							// anki id and hash are always after heading containing #card tag
 							if (currentCard && currentCard?.position?.start.line === element.position!.start.line - 1) {
 								const [_, ankiId, md5hash, __] = element.value.split(" ")
@@ -195,6 +194,8 @@ export default class MyPlugin extends Plugin {
 					const back = value.back
 					const backTexts = []
 					const frontTexts = []
+					const images = []
+
 					for (const element of back) {
 						if (element.type === "paragraph") {
 							for (const child of element.children) {
@@ -202,6 +203,10 @@ export default class MyPlugin extends Plugin {
 									backTexts.push(child.value)
 								} else if (child.type === "inlineCode") {
 									backTexts.push("`" + child.value + "`")
+								} else if (child.type === "image") {
+									const imageText = `![${child.alt}](${child.url})`
+									images.push(child.url)
+									backTexts.push(imageText)
 								}
 							}
 						} else if (element.type === "code") {
@@ -260,38 +265,61 @@ export default class MyPlugin extends Plugin {
 						const frontHtml = await u()
 							.process(frontText)
 
+						// const mediaFilesAction = images.map((image: string) => {
+						// 	return {
+						// 		"action": "storeMediaFile",
+						// 		"version": 6,
+						// 		"params": {
+						// 			"filename": image,
+						// 		}
+						// 	}
+						// })
+
+
 						const response = await fetch("http://localhost:8765", {
 							method: "POST",
-							body: JSON.stringify({
-								"action": action,
-								"version": 6,
-								"params": {
-									"note": {
-										"id": Number(value.ankiId) ? Number(value.ankiId) : null,
-										"deckName": deck,
-										"modelName": "Basic-23794",
-										"fields": {
-											"Front": String(frontHtml),
-											"Back": String(backHtml)
-										},
-										"tags": tags
+							body: JSON.stringify(
+								{
+									"action": "multi",
+									"version": 6,
+									"params": {
+										"actions": [
+											{
+												"action": action,
+												"version": 6,
+												"params": {
+													"note": {
+														"id": Number(value.ankiId) ? Number(value.ankiId) : null,
+														"deckName": deck,
+														"modelName": "Basic-23794",
+														"fields": {
+															"Front": String(frontHtml),
+															"Back": String(backHtml)
+														},
+														"tags": tags,
+													}
+												}
+											},
+											// ...mediaFilesAction,
+										]
 									}
 								}
-							})
+							)
 						})
+
 						const data = await response.json()
 						if (data.error) {
 							console.log(data.error)
-						} else {
+						} else if (!data.result[0].error) {
 							if (action === "addNote") {
-								const ankiId = data.result
+								const ankiId = data.result[0].result
 								cards[key].ankiId = ankiId
 
 								const line = value.position.start.line - 1
 								const hashtag = "#".repeat(value.depth)
 								this.app.workspace.activeEditor?.editor?.setLine(line + count, `${hashtag} ${key}\n<!-- ${ankiId} ${md5hash} -->`)
 								count++
-							} else {
+							} else { // updateNote
 								const ankiId = cards[key].ankiId
 								const line = value.position.start.line
 								this.app.workspace.activeEditor?.editor?.setLine(line + count, `<!-- ${ankiId} ${md5hash} -->`)
