@@ -209,6 +209,11 @@ export default class MyPlugin extends Plugin {
 									backTexts.push(imageText)
 								}
 							}
+						} else if (element.type === "list") {
+							for (const listItem of element.children) {
+								const children = getChildren(listItem)
+								backTexts.push("- " + children.join(" "))
+							}
 						} else if (element.type === "code") {
 							backTexts.push("```" + element.lang + "\n" + element.value + "\n```")
 						}
@@ -228,6 +233,10 @@ export default class MyPlugin extends Plugin {
 									frontTexts.push(child.value)
 								} else if (child.type === "inlineCode") {
 									frontTexts.push("`" + child.value + "`")
+								} else if (child.type === "image") {
+									const imageText = `![${child.alt}](${child.url})`
+									images.push(child.url)
+									frontTexts.push(imageText)
 								}
 							}
 						} else if (element.type === "list") {
@@ -264,16 +273,17 @@ export default class MyPlugin extends Plugin {
 						const frontHtml = await u()
 							.process(frontText)
 
-						// const mediaFilesAction = images.map((image: string) => {
-						// 	return {
-						// 		"action": "storeMediaFile",
-						// 		"version": 6,
-						// 		"params": {
-						// 			"filename": image,
-						// 		}
-						// 	}
-						// })
-
+						const vaultLocation = (this.app.vault.adapter as any).basePath
+						const mediaFilesAction = images.map((image: string) => {
+							return {
+								"action": "storeMediaFile",
+								"version": 6,
+								"params": {
+									"filename": image,
+									"path": vaultLocation + "/" + image
+								}
+							}
+						})
 
 						const response = await fetch("http://localhost:8765", {
 							method: "POST",
@@ -299,7 +309,7 @@ export default class MyPlugin extends Plugin {
 													}
 												}
 											},
-											// ...mediaFilesAction,
+											...mediaFilesAction,
 										]
 									}
 								}
