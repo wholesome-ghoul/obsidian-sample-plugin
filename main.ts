@@ -163,7 +163,7 @@ export default class MyPlugin extends Plugin {
 							const _tags = rawTags.split(" ").slice(1)
 							const _deck = rawDeck.split("deck:")[1]
 
-							deck = _deck
+							deck = "all::" + _deck.trim()
 							tags.push(..._tags)
 						} else {
 							currentCard = element
@@ -258,7 +258,6 @@ export default class MyPlugin extends Plugin {
 						if (value.ankiId) {
 							action = "updateNote"
 						}
-
 
 						const backHtml = await u()
 							.process(backText)
