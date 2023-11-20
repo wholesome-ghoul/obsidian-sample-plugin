@@ -132,7 +132,8 @@ export default class MyPlugin extends Plugin {
 				}
 
 				const cards: { [key: string]: any } = {}
-				let currentCard = null
+				let currentCardQueue: any[] = []
+				// SHOULD BE as a kye for currentCards
 				let additonalFront = false
 				// let additonalBack = false
 				for (let i = 0; i < processor.children.length; i++) {
@@ -148,6 +149,8 @@ export default class MyPlugin extends Plugin {
 							}
 
 							// anki id and hash are always after heading containing #card tag
+
+							const currentCard = currentCardQueue[currentCardQueue.length - 1]
 							if (currentCard && currentCard?.position?.start.line === element.position!.start.line - 1) {
 								const [_, ankiId, md5hash, __] = element.value.split(" ")
 								const key = (currentCard.children[0] as any)?.value
@@ -173,22 +176,44 @@ export default class MyPlugin extends Plugin {
 							const depth = element.depth
 							const position = element.position
 
+							if (!key.includes("#card") && !key.includes("#include")) {
+								currentCardQueue = []
+								continue
+							}
+
+							// # #card
+							// ## #card #include
+							// ## #card #include
+							// ## #include
+							// # #card
+
+							// # < ##
+							for (const currentCard of currentCardQueue) {
+								if (currentCard.depth < depth) {
+									continue
+								}
+
+								currentCardQueue.pop()
+							}
+
 							if (key.includes("#card")) {
-								currentCard = element
 								cards[key] = { front: [element], back: [], depth, position, ankiId: null, hash: null }
-							} else if (key.includes("#include")) {
-								if (currentCard) {
+								currentCardQueue.push(element)
+							}
+
+							for (const currentCard of currentCardQueue) {
+								if (key.includes("#include")) {
 									cards[(currentCard.children[0] as any)?.value].back.push(element)
 								}
-							} else {
-								currentCard = null
 							}
 						}
-					} else if (currentCard) {
-						if (additonalFront) {
-							cards[(currentCard.children[0] as any)?.value].front.push(element)
-						} else {
-							cards[(currentCard.children[0] as any)?.value].back.push(element)
+					} else {
+						for (const currentCard of currentCardQueue) {
+							if (additonalFront) {
+								cards[(currentCard.children[0] as any)?.value].front.push(element)
+							} else {
+								cards[(currentCard.children[0] as any)?.value].back.push(element)
+							}
 						}
 					}
 				}
