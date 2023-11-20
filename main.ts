@@ -106,7 +106,7 @@ export default class MyPlugin extends Plugin {
 					.use(rehypeStringify, { allowDangerousHtml: true })
 					.use({ settings: { bullet: "-" } })
 
-				function getChildren(node: any): any {
+				function getChildren(node: any, images?: any): any {
 					const children = []
 					for (const child of node.children) {
 						if (child.type === "text") {
@@ -121,6 +121,10 @@ export default class MyPlugin extends Plugin {
 							}
 						} else if (child.type === "code") {
 							children.push("```" + child.lang + "\n" + child.value + "\n```")
+						} else if (child.type === "image") {
+							const imageText = `![${child.alt}](${child.url})`
+							images.push(child.url)
+							children.push(imageText)
 						}
 					}
 
@@ -166,12 +170,16 @@ export default class MyPlugin extends Plugin {
 							deck = "all::" + _deck.trim()
 							tags.push(..._tags)
 						} else {
-							currentCard = element
 							const depth = element.depth
 							const position = element.position
 
 							if (key.includes("#card")) {
+								currentCard = element
 								cards[key] = { front: [element], back: [], depth, position, ankiId: null, hash: null }
+							} else if (key.includes("#include")) {
+								if (currentCard) {
+									cards[(currentCard.children[0] as any)?.value].back.push(element)
+								}
 							} else {
 								currentCard = null
 							}
@@ -187,28 +195,22 @@ export default class MyPlugin extends Plugin {
 
 				const crypto = require('crypto');
 
-				let pattern = /#card\s*(.*)/g
+				let pattern = /#(card|include)\s*(.*)/g
 				let count = 0 // how many anki ids we have inserted
 				for await (const [key, value] of Object.entries(cards)) {
 					const front = value.front
 					const back = value.back
 					const backTexts = []
 					const frontTexts = []
-					const images = []
+					const images: any = []
 
 					for (const element of back) {
 						if (element.type === "paragraph") {
-							for (const child of element.children) {
-								if (child.type === "text") {
-									backTexts.push(child.value)
-								} else if (child.type === "inlineCode") {
-									backTexts.push("`" + child.value + "`")
-								} else if (child.type === "image") {
-									const imageText = `![${child.alt}](${child.url})`
-									images.push(child.url)
-									backTexts.push(imageText)
-								}
-							}
+							const children = getChildren(element, images)
+							backTexts.push(children.join(" "))
+						} else if (element.type === "heading") {
+							const child = element.children[0].value.replace(pattern, "").trim()
+							backTexts.push(child)
 						} else if (element.type === "list") {
 							for (const listItem of element.children) {
 								const children = getChildren(listItem)
